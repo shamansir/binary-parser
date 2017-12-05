@@ -19,6 +19,21 @@ describe('Composite parser', function(){
                 message: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
             });
         });
+        it('should parse array of primitive types with lengthInBytes', function(){
+            var parser =
+                Parser.start()
+                .uint8('length')
+                .array('message', {
+                    lengthInBytes: 'length',
+                    type: 'uint8'
+                });
+
+            var buffer = new Buffer([12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+            assert.deepEqual(parser.parse(buffer), {
+                length: 12,
+                message: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            });
+        });
         it('should parse array of user defined types', function(){
             var elementParser = new Parser()
                 .uint8('key')
@@ -35,6 +50,70 @@ describe('Composite parser', function(){
             var buffer = new Buffer([0x02, 0x00, 0xca, 0xd2, 0x04, 0xbe, 0xd3, 0x04]);
             assert.deepEqual(parser.parse(buffer), {
                 length: 0x02,
+                message: [
+                    {key: 0xca, value: 1234},
+                    {key: 0xbe, value: 1235}
+                ]
+            });
+        });
+        it('should parse array of user defined types with lengthInBytes', function(){
+            var elementParser = new Parser()
+                .uint8('key')
+                .int16le('value');
+
+            var parser =
+                Parser.start()
+                .uint16le('length')
+                .array('message', {
+                    lengthInBytes: 'length',
+                    type: elementParser
+                });
+
+            var buffer = new Buffer([0x06, 0x00, 0xca, 0xd2, 0x04, 0xbe, 0xd3, 0x04]);
+            assert.deepEqual(parser.parse(buffer), {
+                length: 0x06,
+                message: [
+                    {key: 0xca, value: 1234},
+                    {key: 0xbe, value: 1235}
+                ]
+            });
+        });
+        it('should parse array of user defined types with lengthInBytes literal', function(){
+            var elementParser = new Parser()
+                .uint8('key')
+                .int16le('value');
+
+            var parser =
+                Parser.start()
+                .array('message', {
+                    lengthInBytes: 0x06,
+                    type: elementParser
+                });
+
+            var buffer = new Buffer([0xca, 0xd2, 0x04, 0xbe, 0xd3, 0x04]);
+            assert.deepEqual(parser.parse(buffer), {
+                message: [
+                    {key: 0xca, value: 1234},
+                    {key: 0xbe, value: 1235}
+                ]
+            });
+        });
+        it('should parse array of user defined types with lengthInBytes function', function(){
+            var elementParser = new Parser()
+                .uint8('key')
+                .int16le('value');
+
+            var parser =
+                Parser.start()
+                .uint16le('length')
+                .array('message', {
+                    lengthInBytes: function() { return this.length; },
+                    type: elementParser
+                });
+
+            var buffer = new Buffer([0x06, 0x00, 0xca, 0xd2, 0x04, 0xbe, 0xd3, 0x04]);
+            assert.deepEqual(parser.parse(buffer), {
+                length: 0x06,
                 message: [
                     {key: 0xca, value: 1234},
                     {key: 0xbe, value: 1235}
@@ -240,6 +319,33 @@ describe('Composite parser', function(){
                     length: 1,
                     data: [ { length: 0, data: [] } ]
                 } ]
+            });
+        });
+
+        it('should allow parent parser attributes as choice key', function() {
+            var ChildParser = Parser.start()
+                .choice('data', {
+                    tag: function(vars) {
+                        return vars.version;
+                    },
+                    choices: {
+                        1: Parser.start().uint8('v1'),
+                        2: Parser.start().uint16('v2'),
+                    }
+                });
+
+            var ParentParser = Parser.start()
+                .uint8('version')
+                .nest('child', { type: ChildParser });
+
+            var buffer = new Buffer([0x1, 0x2]);
+            assert.deepEqual(ParentParser.parse(buffer), {
+                version: 1, child: { data: { v1: 2 } }
+            });
+
+            buffer = new Buffer([0x2, 0x3, 0x4]);
+            assert.deepEqual(ParentParser.parse(buffer), {
+                version: 2, child: { data: { v2: 0x0304 } }
             });
         });
     });
@@ -561,6 +667,25 @@ describe('Composite parser', function(){
         });
     });
 
+    describe('Buffer parser', function() {
+            //this is a test for testing a fix of a bug, that removed the last byte of the
+            //buffer parser
+            it('should return a buffer with same size', function() {
+
+                var bufferParser = new Parser()
+                    .buffer('buf', {
+                        readUntil: 'eof',
+                        formatter: function(buffer) {
+                            return buffer;
+                        }
+                    })
+
+                var buffer = new Buffer('John\0Doe\0');
+                assert.deepEqual(bufferParser.parse(buffer),{buf:buffer});
+            });
+    });
+
+
     describe('Constructors', function() {
         it('should create a custom object type', function() {
            function Person () {
@@ -592,9 +717,10 @@ describe('Composite parser', function(){
                 .array('data', {
                     length: 3,
                     type: 'int8'
-                });
+                })
+                .buffer('raw', {length:8});
 
-            assert.equal(parser.sizeOf(), 1 + 4 + 10 + 2 + 3);
+            assert.equal(parser.sizeOf(), 1 + 4 + 10 + 2 + 3 + 8);
         });
         it('should assert parsed values', function() {
             var parser =
